@@ -10,7 +10,7 @@ from evaluate import load as evaluate_load
 from peft import get_peft_model, LoraConfig
 from transformers import (
     GPT2LMHeadModel, AutoTokenizer, Trainer,
-    TrainingArguments, GPTNeoForCausalLM, GPTJForCausalLM
+    TrainingArguments
 )
 
 import wandb
@@ -238,7 +238,10 @@ def download(api_key: str):
         load_model_and_tokenizer(model_name)
 
 
-def test():
+def test(model_name: str):
+    # set wandb to offline mode
+    os.environ["WANDB_MODE"] = "offline"
+
     # initialize torch device
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"using device {device}")
@@ -264,96 +267,98 @@ def test():
             continue
 
     # run models
-    for model_name, model_class in gpt_models.items():
-        print(f"Processing model: {model_name}")
-        model, tokenizer = load_model_and_tokenizer(model_name)
+    # for model_name, model_class in gpt_models.items():
+    # model_class = gpt_models[model_name]
 
-        for ds_name, ds in loaded_datasets.items():
-            print(f"Processing dataset: {ds_name}")
-            small_dataset = subsample_dataset(ds, dataset_fraction)
-            tokenized_dataset = small_dataset.map(lambda x: preprocess_data(x, tokenizer), batched=True)
-            tokenized_dataset.set_format("torch")
+    print(f"Processing model: {model_name}")
+    model, tokenizer = load_model_and_tokenizer(model_name)
 
-            training_args = TrainingArguments(
-                output_dir=f"./{model_name}-{ds_name}-finetuned-sql",
-                evaluation_strategy="epoch",
-                learning_rate=1e-4,
-                per_device_train_batch_size=train_batch_size,
-                per_device_eval_batch_size=train_batch_size,
-                num_train_epochs=train_epochs,
-                weight_decay=0.01,
-                save_total_limit=3,
-                logging_dir=f'./logs-{model_name}-{ds_name}',
-                gradient_accumulation_steps=2,
-            )
+    for ds_name, ds in loaded_datasets.items():
+        print(f"Processing dataset: {ds_name}")
+        small_dataset = subsample_dataset(ds, dataset_fraction)
+        tokenized_dataset = small_dataset.map(lambda x: preprocess_data(x, tokenizer), batched=True)
+        tokenized_dataset.set_format("torch")
 
-            fine_tune_model(device, model, tokenizer, ds_name, tokenized_dataset, model_name, training_args, "Standard", **metrics)
+        training_args = TrainingArguments(
+            output_dir=f"./{model_name}-{ds_name}-finetuned-sql",
+            evaluation_strategy="epoch",
+            learning_rate=1e-4,
+            per_device_train_batch_size=train_batch_size,
+            per_device_eval_batch_size=train_batch_size,
+            num_train_epochs=train_epochs,
+            weight_decay=0.01,
+            save_total_limit=3,
+            logging_dir=f'./logs-{model_name}-{ds_name}',
+            gradient_accumulation_steps=2,
+        )
 
-            # LoRA
-            print(f"Applying LoRA to {model_name}")
-            lora_config = LoraConfig(
-                r=8,
-                lora_alpha=32,
-                target_modules=["attn.c_attn"],
-                lora_dropout=0.1,
-                fan_in_fan_out=True
+        fine_tune_model(device, model, tokenizer, ds_name, tokenized_dataset, model_name, training_args, "Standard", **metrics)
 
-            )
-            model_lora = get_peft_model(model, lora_config)
+        # LoRA
+        print(f"Applying LoRA to {model_name}")
+        lora_config = LoraConfig(
+            r=8,
+            lora_alpha=32,
+            target_modules=["attn.c_attn"],
+            lora_dropout=0.1,
+            fan_in_fan_out=True
 
-            training_args_lora = TrainingArguments(
-                output_dir=f"./lora_{model_name}-{ds_name}_finetuned_sql",
-                evaluation_strategy="epoch",
-                learning_rate=5e-4,
-                per_device_train_batch_size=test_batch_size,
-                per_device_eval_batch_size=test_batch_size,
-                num_train_epochs=train_epochs,
-                weight_decay=0.01,
-                save_total_limit=3,
-                logging_dir=f'./logs-lora-{model_name}-{ds_name}',
-            )
+        )
+        model_lora = get_peft_model(model, lora_config)
 
-            fine_tune_model(device, model_lora, tokenizer, ds_name, tokenized_dataset, model_name, training_args_lora, "LoRA", **metrics)
+        training_args_lora = TrainingArguments(
+            output_dir=f"./lora_{model_name}-{ds_name}_finetuned_sql",
+            evaluation_strategy="epoch",
+            learning_rate=5e-4,
+            per_device_train_batch_size=test_batch_size,
+            per_device_eval_batch_size=test_batch_size,
+            num_train_epochs=train_epochs,
+            weight_decay=0.01,
+            save_total_limit=3,
+            logging_dir=f'./logs-lora-{model_name}-{ds_name}',
+        )
 
-            # ReFT
-            # print(f"Applying ReFT to {model_name}")
-            # reft_config = pyreft.ReftConfig(
-            #     representations=[{
-            #         "layer": l,
-            #         "component": "block_output",
-            #         "low_rank_dimension": 2,
-            #         "intervention": pyreft.LoreftIntervention(
-            #             embed_dim=model.config.hidden_size,
-            #             low_rank_dimension=2
-            #         )
-            #     } for l in [2, 4, 6]]
-            # )
-            # reft_model = pyreft.get_reft_model(model, reft_config)
-            # reft_model.set_device(device)
+        fine_tune_model(device, model_lora, tokenizer, ds_name, tokenized_dataset, model_name, training_args_lora, "LoRA", **metrics)
 
-            # reft_training_args = TrainingArguments(
-            #     output_dir=f"./{model_name}-reft-{ds_name}-finetuned-sql",
-            #     evaluation_strategy="epoch",
-            #     learning_rate=5e-5,
-            #     per_device_train_batch_size=2,
-            #     per_device_eval_batch_size=2,
-            #     num_train_epochs=2,
-            #     weight_decay=0.01,
-            #     save_total_limit=3,
-            #     logging_dir=f'./logs-reft-{model_name}-{ds_name}',
-            # )
+        # ReFT
+        # print(f"Applying ReFT to {model_name}")
+        # reft_config = pyreft.ReftConfig(
+        #     representations=[{
+        #         "layer": l,
+        #         "component": "block_output",
+        #         "low_rank_dimension": 2,
+        #         "intervention": pyreft.LoreftIntervention(
+        #             embed_dim=model.config.hidden_size,
+        #             low_rank_dimension=2
+        #         )
+        #     } for l in [2, 4, 6]]
+        # )
+        # reft_model = pyreft.get_reft_model(model, reft_config)
+        # reft_model.set_device(device)
 
-            # fine_tune_model(device, reft_model, tokenizer, ds_name, tokenized_dataset, model_name, reft_training_args, "ReFT")
+        # reft_training_args = TrainingArguments(
+        #     output_dir=f"./{model_name}-reft-{ds_name}-finetuned-sql",
+        #     evaluation_strategy="epoch",
+        #     learning_rate=5e-5,
+        #     per_device_train_batch_size=2,
+        #     per_device_eval_batch_size=2,
+        #     num_train_epochs=2,
+        #     weight_decay=0.01,
+        #     save_total_limit=3,
+        #     logging_dir=f'./logs-reft-{model_name}-{ds_name}',
+        # )
+
+        # fine_tune_model(device, reft_model, tokenizer, ds_name, tokenized_dataset, model_name, reft_training_args, "ReFT")
 
 
 def main():
     if len(argv) == 3 and argv[1] == 'download':
         download(argv[2])
-    elif len(argv) == 2 and argv[1] == 'test':
-        test()
+    elif len(argv) == 3 and argv[1] == 'test':
+        test(argv[2])
     else:
         print('args: download <wandb_token>')
-        print('      test')
+        print('      test <model_name>')
 
 
 if __name__ == '__main__':
