@@ -27,3 +27,6 @@ htmlcov/
 # dist
 /dist/
 *.egg-info/
+
+# cache
+/cache/
