@@ -28,5 +28,6 @@ htmlcov/
 /dist/
 *.egg-info/
 
-# cache
+# runtime stuff
 /cache/
+/wandb/

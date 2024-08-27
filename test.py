@@ -4,7 +4,6 @@ from sys import argv
 
 import numpy as np
 import torch
-import wandb
 from Levenshtein import distance as levenshtein_distance
 from datasets import load_dataset, DatasetDict
 from evaluate import load as evaluate_load
@@ -13,6 +12,8 @@ from transformers import (
     GPT2LMHeadModel, AutoTokenizer, Trainer,
     TrainingArguments, GPTNeoForCausalLM, GPTJForCausalLM
 )
+
+import wandb
 
 # configuration
 datasets = {
@@ -25,13 +26,15 @@ gpt_models = {
     "gpt2-medium": GPT2LMHeadModel,
     "gpt2-large": GPT2LMHeadModel,
     "gpt2-xl": GPT2LMHeadModel,
-    "gpt-neo": GPTNeoForCausalLM,
-    "gpt-j": GPTJForCausalLM,
+    # "gpt-neo": GPTNeoForCausalLM,
+    # "gpt-j": GPTJForCausalLM,
 }
 gpt_models_cache_dir = "./cache/gpt_models/"
 
 metrics_cache_dir = "./cache/metrics/"
 
+dataset_fraction = 0.001
+train_epochs = 1
 train_batch_size = 1
 test_batch_size = 1
 
@@ -39,7 +42,7 @@ os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
 
 # main code
-def compute_metrics(eval_pred):
+def compute_metrics(eval_pred, tokenizer, exact_match_metric, f1_metric, bleu_metric):
     logits, labels = eval_pred
     predictions = np.argmax(logits, axis=-1)
 
@@ -129,7 +132,7 @@ def load_model_and_tokenizer(model_name):
     return model, tokenizer
 
 
-def subsample_dataset(dataset, fraction=1.0):
+def subsample_dataset(dataset, fraction):
     print(f"Subsampling dataset with fraction: {fraction}")
     if "test" in dataset:
         small_test_dataset = dataset["test"].shuffle(seed=42).select(range(int(len(dataset["test"]) * fraction)))
@@ -173,7 +176,13 @@ def preprocess_data(examples, tokenizer):
     """
 
 
-def fine_tune_model(model, tokenizer, ds_name, tokenized_dataset, model_name, training_args, strategy_name="Standard"):
+def fine_tune_model(device, model, tokenizer, ds_name, tokenized_dataset, model_name, training_args, strategy_name="Standard", **metrics):
+    # I use a wrapper to pass the tokenizer and the metrics functions
+    # for now. There sure is a better way to do this. Change it if you
+    # like...
+    def compute_metrics_wrapper(eval_pred):
+        return compute_metrics(eval_pred, tokenizer, **metrics)
+
     print(f"Starting fine-tuning for {model_name} on {ds_name} ({strategy_name})")
     trainer = Trainer(
         model=model.to(device),
@@ -181,8 +190,9 @@ def fine_tune_model(model, tokenizer, ds_name, tokenized_dataset, model_name, tr
         train_dataset=tokenized_dataset["train"],
         eval_dataset=tokenized_dataset["test"],
         tokenizer=tokenizer,
-        compute_metrics=compute_metrics,
+        compute_metrics=compute_metrics_wrapper,
     )
+
     start_time = time.time()
     trainer.train()
     end_time = time.time()
@@ -231,11 +241,14 @@ def download(api_key: str):
 def test():
     # initialize torch device
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    print(f"using device {device}")
 
     # load metrics
-    exact_match_metric = evaluate_load("exact_match", trust_remote_code=True)
-    f1_metric = evaluate_load("f1", trust_remote_code=True)
-    bleu_metric = evaluate_load("bleu", trust_remote_code=True)
+    metrics = {
+        'exact_match_metric': evaluate_load("exact_match", trust_remote_code=True, cache_dir=metrics_cache_dir),
+        'f1_metric': evaluate_load("f1", trust_remote_code=True, cache_dir=metrics_cache_dir),
+        'bleu_metric': evaluate_load("bleu", trust_remote_code=True, cache_dir=metrics_cache_dir)
+    }
 
     # load datasets
     loaded_datasets = {}
@@ -257,7 +270,7 @@ def test():
 
         for ds_name, ds in loaded_datasets.items():
             print(f"Processing dataset: {ds_name}")
-            small_dataset = subsample_dataset(ds)
+            small_dataset = subsample_dataset(ds, dataset_fraction)
             tokenized_dataset = small_dataset.map(lambda x: preprocess_data(x, tokenizer), batched=True)
             tokenized_dataset.set_format("torch")
 
@@ -267,14 +280,14 @@ def test():
                 learning_rate=1e-4,
                 per_device_train_batch_size=train_batch_size,
                 per_device_eval_batch_size=train_batch_size,
-                num_train_epochs=10,
+                num_train_epochs=train_epochs,
                 weight_decay=0.01,
                 save_total_limit=3,
                 logging_dir=f'./logs-{model_name}-{ds_name}',
                 gradient_accumulation_steps=2,
             )
 
-            fine_tune_model(model, tokenizer, ds_name, tokenized_dataset, model_name, training_args, "Standard")
+            fine_tune_model(device, model, tokenizer, ds_name, tokenized_dataset, model_name, training_args, "Standard", **metrics)
 
             # LoRA
             print(f"Applying LoRA to {model_name}")
@@ -294,13 +307,13 @@ def test():
                 learning_rate=5e-4,
                 per_device_train_batch_size=test_batch_size,
                 per_device_eval_batch_size=test_batch_size,
-                num_train_epochs=10,
+                num_train_epochs=train_epochs,
                 weight_decay=0.01,
                 save_total_limit=3,
                 logging_dir=f'./logs-lora-{model_name}-{ds_name}',
             )
 
-            fine_tune_model(model_lora, tokenizer, ds_name, tokenized_dataset, model_name, training_args_lora, "LoRA")
+            fine_tune_model(device, model_lora, tokenizer, ds_name, tokenized_dataset, model_name, training_args_lora, "LoRA", **metrics)
 
             # ReFT
             # print(f"Applying ReFT to {model_name}")
@@ -330,7 +343,7 @@ def test():
             #     logging_dir=f'./logs-reft-{model_name}-{ds_name}',
             # )
 
-            # fine_tune_model(reft_model, tokenizer, ds_name, tokenized_dataset, model_name, reft_training_args, "ReFT")
+            # fine_tune_model(device, reft_model, tokenizer, ds_name, tokenized_dataset, model_name, reft_training_args, "ReFT")
 
 
 def main():
