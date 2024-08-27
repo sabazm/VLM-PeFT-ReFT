@@ -357,8 +357,8 @@ def main():
     elif len(argv) == 3 and argv[1] == 'test':
         test(argv[2])
     else:
-        print('args: download <wandb_token>')
-        print('      test <model_name>')
+        print(f'args: download <wandb_token>')
+        print(f'      test <{",".join(gpt_models.keys())}>')
 
 
 if __name__ == '__main__':
