@@ -33,10 +33,10 @@ gpt_models_cache_dir = "./cache/gpt_models/"
 
 metrics_cache_dir = "./cache/metrics/"
 
-dataset_fraction = 0.001
-train_epochs = 1
-train_batch_size = 1
-test_batch_size = 1
+dataset_fraction = 0.5
+train_epochs = 10
+train_batch_size = 8
+test_batch_size = 8
 
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
