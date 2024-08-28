@@ -1,4 +1,5 @@
 import os
+import subprocess
 import time
 from sys import argv
 
@@ -38,6 +39,16 @@ default_batch_size = 8
 default_dataset_fraction = 1.0
 
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
+
+
+# code to query nvidia tools
+def choose_gpu_by_free_vram():
+    mem_free = subprocess.check_output(["nvidia-smi", "--format=csv,noheader,nounits", "--query-gpu=memory.free"])
+    mem_free_per_gpu = list(map(int, mem_free.decode('utf-8').strip().split('\n')))
+
+    gpu = max(range(len(mem_free_per_gpu)), key=lambda i: mem_free_per_gpu[i])
+
+    return gpu
 
 
 # main code
@@ -244,7 +255,12 @@ def test(model_name: str, batch_size: int, dataset_fraction: float):
     os.environ["WANDB_MODE"] = "offline"
 
     # initialize torch device
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    if torch.cuda.is_available():
+        gpu_index = choose_gpu_by_free_vram()
+        device = torch.device(f"cuda:{gpu_index}")
+    else:
+        device = torch.device("cpu")
+
     print(f"using device {device}")
 
     # load metrics
