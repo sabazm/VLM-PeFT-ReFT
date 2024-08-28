@@ -33,10 +33,9 @@ gpt_models_cache_dir = "./cache/gpt_models/"
 
 metrics_cache_dir = "./cache/metrics/"
 
-dataset_fraction = 0.5
 train_epochs = 10
-train_batch_size = 8
-test_batch_size = 8
+default_batch_size = 8
+default_dataset_fraction = 1.0
 
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
@@ -114,16 +113,18 @@ def compute_metrics(eval_pred, tokenizer, exact_match_metric, f1_metric, bleu_me
 def load_model_and_tokenizer(model_name):
     print(f"Loading model and tokenizer for {model_name}...")
 
-    model_path = os.path.join(gpt_models_cache_dir, model_name.replace('/', '_'))
+    model_path = os.path.join(gpt_models_cache_dir, model_name.replace('/', '_') + '_model')
+    tokenizer_path = os.path.join(gpt_models_cache_dir, model_name.replace('/', '_') + '_tokenizer')
+
     if not os.path.exists(model_path):
-        model = GPT2LMHeadModel.from_pretrained(model_name, cache_dir=model_path)
-        tokenizer = AutoTokenizer.from_pretrained(model_name, cache_dir=model_path)
+        model = GPT2LMHeadModel.from_pretrained(model_name)
+        tokenizer = AutoTokenizer.from_pretrained(model_name)
         tokenizer.pad_token = tokenizer.eos_token
         model.save_pretrained(model_path)
-        tokenizer.save_pretrained(model_path)
+        tokenizer.save_pretrained(tokenizer_path)
     else:
         model = GPT2LMHeadModel.from_pretrained(model_path)
-        tokenizer = AutoTokenizer.from_pretrained(model_path)
+        tokenizer = AutoTokenizer.from_pretrained(tokenizer_path)
         tokenizer.pad_token = tokenizer.eos_token
 
     print("Special tokens:", tokenizer.special_tokens_map)
@@ -238,7 +239,7 @@ def download(api_key: str):
         load_model_and_tokenizer(model_name)
 
 
-def test(model_name: str):
+def test(model_name: str, batch_size: int, dataset_fraction: float):
     # set wandb to offline mode
     os.environ["WANDB_MODE"] = "offline"
 
@@ -281,10 +282,12 @@ def test(model_name: str):
 
         training_args = TrainingArguments(
             output_dir=f"./{model_name}-{ds_name}-finetuned-sql",
-            evaluation_strategy="epoch",
+            # evaluation_strategy="epoch",
+            do_train=True,
+            do_eval=False,
             learning_rate=1e-4,
-            per_device_train_batch_size=train_batch_size,
-            per_device_eval_batch_size=train_batch_size,
+            per_device_train_batch_size=batch_size,
+            per_device_eval_batch_size=batch_size,
             num_train_epochs=train_epochs,
             weight_decay=0.01,
             save_total_limit=3,
@@ -307,11 +310,13 @@ def test(model_name: str):
         model_lora = get_peft_model(model, lora_config)
 
         training_args_lora = TrainingArguments(
-            output_dir=f"./lora_{model_name}-{ds_name}_finetuned_sql",
-            evaluation_strategy="epoch",
+            output_dir=f"./{model_name}-{ds_name}_lora_finetuned_sql",
+            # evaluation_strategy="epoch",
+            do_train=True,
+            do_eval=False,
             learning_rate=5e-4,
-            per_device_train_batch_size=test_batch_size,
-            per_device_eval_batch_size=test_batch_size,
+            per_device_train_batch_size=batch_size,
+            per_device_eval_batch_size=batch_size,
             num_train_epochs=train_epochs,
             weight_decay=0.01,
             save_total_limit=3,
@@ -354,11 +359,15 @@ def test(model_name: str):
 def main():
     if len(argv) == 3 and argv[1] == 'download':
         download(argv[2])
-    elif len(argv) == 3 and argv[1] == 'test':
-        test(argv[2])
+    elif len(argv) >= 3 and argv[1] == 'test':
+        batch_size = int(argv[3]) if len(argv) >= 4 else default_batch_size
+        dataset_fraction = float(argv[4]) if len(argv) >= 5 else default_dataset_fraction
+
+        print(f'test with {batch_size=} and {dataset_fraction=}')
+        test(argv[2], batch_size, dataset_fraction)
     else:
         print(f'args: download <wandb_token>')
-        print(f'      test <{",".join(gpt_models.keys())}>')
+        print(f'      test <{",".join(gpt_models.keys())}> <batch_size={default_batch_size}> <dataset_fraction={default_dataset_fraction}>')
 
 
 if __name__ == '__main__':
