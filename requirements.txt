@@ -1,0 +1,9 @@
+torch==2.4.0
+transformers==4.40.2
+datasets==2.20.0
+peft==0.12.0
+pyreft==0.0.6
+evaluate==0.4.2
+nltk~=3.8.1
+python-Levenshtein==0.25.1
+nnsight~=0.2.21
